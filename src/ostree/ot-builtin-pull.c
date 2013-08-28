@@ -27,7 +27,10 @@
 #include "ostree.h"
 #include "otutil.h"
 
+gboolean opt_commit_only;
+
 static GOptionEntry options[] = {
+  { "commit-only", 'm', 0, G_OPTION_ARG_NONE, &opt_commit_only, "Download only the commit", NULL },
   { NULL }
 };
 
@@ -63,6 +66,9 @@ ostree_builtin_pull (int argc, char **argv, OstreeRepo *repo, GCancellable *canc
         g_ptr_array_add (refs_to_fetch, argv[i]);
       g_ptr_array_add (refs_to_fetch, NULL);
     }
+
+  if (opt_commit_only)
+    pullflags |= OSTREE_REPO_PULL_FLAGS_COMMIT_ONLY;
 
   console = gs_console_get ();
   if (console)

@@ -693,9 +693,19 @@ meta_fetch_on_complete (GObject           *object,
                                 FALSE, &metadata, error))
         goto out;
       
-      ostree_repo_write_metadata_async (pull_data->repo, objtype, checksum, metadata,
-                                        pull_data->cancellable,
-                                        on_metadata_writed, fetch_data);
+      if (objtype == OSTREE_OBJECT_TYPE_COMMIT)
+        {
+          gboolean is_thin = (pull_data->flags & OSTREE_REPO_PULL_FLAGS_COMMIT_ONLY) > 0;
+          ostree_repo_write_commit_async (pull_data->repo, checksum, metadata, is_thin,
+                                          pull_data->cancellable,
+                                          on_metadata_writed, fetch_data);
+        }
+      else
+        {
+          ostree_repo_write_metadata_async (pull_data->repo, objtype, checksum, metadata,
+                                            pull_data->cancellable,
+                                            on_metadata_writed, fetch_data);
+        }
       pull_data->n_outstanding_metadata_write_requests++;
     }
 
@@ -743,24 +753,28 @@ scan_commit_object (OtPullData         *pull_data,
     }
 #endif
 
-  if (!ostree_repo_load_variant (pull_data->repo, OSTREE_OBJECT_TYPE_COMMIT, checksum,
-                                 &commit, error))
+  if (!ostree_repo_load_commit (pull_data->repo, checksum, &commit, NULL,
+                                cancellable, error))
     goto out;
 
   /* PARSE OSTREE_SERIALIZED_COMMIT_VARIANT */
   g_variant_get_child (commit, 6, "@ay", &tree_contents_csum);
   g_variant_get_child (commit, 7, "@ay", &tree_meta_csum);
 
-  if (!scan_one_metadata_object (pull_data, ostree_checksum_bytes_peek (tree_contents_csum),
-                                 OSTREE_OBJECT_TYPE_DIR_TREE, recursion_depth + 1,
-                                 cancellable, error))
-    goto out;
+  // If this is a commit only pull, don't grab the top dirtree/dirmeta:
+  if (!(pull_data->flags & OSTREE_REPO_PULL_FLAGS_COMMIT_ONLY))
+    {
+      if (!scan_one_metadata_object (pull_data, ostree_checksum_bytes_peek (tree_contents_csum),
+                                     OSTREE_OBJECT_TYPE_DIR_TREE, recursion_depth + 1,
+                                     cancellable, error))
+        goto out;
 
-  if (!scan_one_metadata_object (pull_data, ostree_checksum_bytes_peek (tree_meta_csum),
-                                 OSTREE_OBJECT_TYPE_DIR_META, recursion_depth + 1,
-                                 cancellable, error))
-    goto out;
-  
+      if (!scan_one_metadata_object (pull_data, ostree_checksum_bytes_peek (tree_meta_csum),
+                                     OSTREE_OBJECT_TYPE_DIR_META, recursion_depth + 1,
+                                     cancellable, error))
+        goto out;
+    }
+
   ret = TRUE;
  out:
   if (iter)
@@ -781,6 +795,7 @@ scan_one_metadata_object (OtPullData         *pull_data,
   gs_free char *tmp_checksum = NULL;
   gboolean is_requested;
   gboolean is_stored;
+  gboolean is_thin_commit = FALSE;
 
   tmp_checksum = ostree_checksum_from_bytes (csum);
   object = ostree_object_name_serialize (tmp_checksum, objtype);
@@ -789,9 +804,19 @@ scan_one_metadata_object (OtPullData         *pull_data,
     return TRUE;
 
   is_requested = g_hash_table_lookup (pull_data->requested_metadata, tmp_checksum) != NULL;
-  if (!ostree_repo_has_object (pull_data->repo, objtype, tmp_checksum, &is_stored,
-                               cancellable, error))
-    goto out;
+  if (objtype == OSTREE_OBJECT_TYPE_COMMIT)
+    {
+      if (!ostree_repo_load_commit (pull_data->repo, tmp_checksum,
+                                    NULL, &is_thin_commit,
+                                    cancellable, error))
+        goto out;
+    }
+  else
+    {
+      if (!ostree_repo_has_object (pull_data->repo, objtype, tmp_checksum, &is_stored,
+                                   cancellable, error))
+        goto out;
+    }
 
   if (!is_stored && !is_requested)
     {
@@ -809,7 +834,13 @@ scan_one_metadata_object (OtPullData         *pull_data,
     }
   else if (is_stored)
     {
-      if (pull_data->transaction_resuming || is_requested)
+      /* Scan if it was already stored,
+         and one of the following:
+         - Resuming an interrupted pull
+         - This object was explicitly requested
+         - The commit object is thin, and we might want to make it non-thin
+      */
+      if (pull_data->transaction_resuming || is_requested || is_thin_commit)
         {
           switch (objtype)
             {

@@ -810,6 +810,7 @@ load_metadata_internal (OstreeRepo       *self,
                         const char       *sha256,
                         gboolean          error_if_not_found,
                         GVariant        **out_variant,
+                        gboolean          check_thin,
                         GInputStream    **out_stream,
                         guint64          *out_size,
                         GCancellable     *cancellable,
@@ -823,7 +824,10 @@ load_metadata_internal (OstreeRepo       *self,
 
   g_return_val_if_fail (OSTREE_OBJECT_TYPE_IS_META (objtype), FALSE);
 
-  _ostree_loose_path (loose_path_buf, sha256, objtype, self->mode);
+  if (objtype == OSTREE_OBJECT_TYPE_COMMIT && check_thin)
+    _ostree_loose_path_with_suffix (loose_path_buf, sha256, objtype, self->mode, "thin");
+  else
+    _ostree_loose_path (loose_path_buf, sha256, objtype, self->mode);
 
   if (!openat_allow_noent (self->objects_dir_fd, loose_path_buf, &fd,
                            cancellable, error))
@@ -1112,7 +1116,7 @@ ostree_repo_load_object_stream (OstreeRepo         *self,
 
   if (OSTREE_OBJECT_TYPE_IS_META (objtype))
     {
-      if (!load_metadata_internal (self, objtype, checksum, TRUE, NULL,
+      if (!load_metadata_internal (self, objtype, checksum, TRUE, NULL, FALSE,
                                    &ret_input, &size,
                                    cancellable, error))
         goto out;
@@ -1325,7 +1329,7 @@ ostree_repo_load_variant_if_exists (OstreeRepo       *self,
                                     GError          **error)
 {
   return load_metadata_internal (self, objtype, sha256, FALSE,
-                                 out_variant, NULL, NULL, NULL, error);
+                                 out_variant, FALSE, NULL, NULL, NULL, error);
 }
 
 /**
@@ -1347,7 +1351,55 @@ ostree_repo_load_variant (OstreeRepo       *self,
                           GError          **error)
 {
   return load_metadata_internal (self, objtype, sha256, TRUE,
-                                 out_variant, NULL, NULL, NULL, error);
+                                 out_variant, FALSE, NULL, NULL, NULL, error);
+}
+
+/**
+ * ostree_repo_load_commit:
+ * @self: Repo
+ * @sha256: Checksum string
+ * @out_variant: (out) (transfer full): Metadata object
+ * @out_is_thin: (out): Whether or not the commit is "thin"; i.e. only storing the commit itself
+ * @error: Error
+ *
+ * Load the metadata object @sha256 of type @objtype, storing the
+ * result in @out_variant.
+ */
+gboolean
+ostree_repo_load_commit (OstreeRepo  *self,
+                         const char    *sha256, 
+                         GVariant     **out_variant,
+                         gboolean      *out_is_thin,
+                         GCancellable  *cancellable,
+                         GError       **error)
+{
+  gboolean ret = FALSE;
+  gs_unref_variant GVariant *ret_variant = NULL;
+
+  if (!load_metadata_internal (self, OSTREE_OBJECT_TYPE_COMMIT, sha256, FALSE,
+                               &ret_variant, FALSE, NULL, NULL,
+                               cancellable, error))
+    goto out;
+
+  if (ret_variant != NULL)
+    {
+      if (out_is_thin)
+        *out_is_thin = FALSE;
+    }
+  else
+    {
+      if (!load_metadata_internal (self, OSTREE_OBJECT_TYPE_COMMIT, sha256, TRUE,
+                                   &ret_variant, TRUE, NULL, NULL,
+                                   cancellable, error))
+        goto out;
+      if (out_is_thin)
+        *out_is_thin = TRUE;
+    }
+
+  ret = TRUE;
+  gs_transfer_out_value (out_variant, &ret_variant);
+ out:
+  return ret;
 }
 
 /**

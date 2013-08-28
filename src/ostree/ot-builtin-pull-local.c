@@ -30,9 +30,11 @@
 #include "otutil.h"
 
 static char *opt_remote;
+gboolean opt_commit_only;
 
 static GOptionEntry options[] = {
   { "remote", 0, 0, G_OPTION_ARG_STRING, &opt_remote, "Add REMOTE to refspec", "REMOTE" },
+  { "commit-only", 'm', 0, G_OPTION_ARG_NONE, &opt_commit_only, "Download only the commit", NULL },
   { NULL }
 };
 
@@ -61,16 +63,17 @@ import_one_object (OtLocalCloneData *data,
                    GError        **error)
 {
   gboolean ret = FALSE;
-  guint64 length;
-  gs_unref_object GInputStream *object = NULL;
-  
-  if (!ostree_repo_load_object_stream (data->src_repo, objtype, checksum,
-                                       &object, &length,
-                                       cancellable, error))
-    goto out;
 
   if (objtype == OSTREE_OBJECT_TYPE_FILE)
     {
+      gs_unref_object GInputStream *object = NULL;
+      guint64 length;
+
+      if (!ostree_repo_load_object_stream (data->src_repo, objtype, checksum,
+                                           &object, &length,
+                                           cancellable, error))
+        goto out;
+
       if (!ostree_repo_write_content_trusted (data->dest_repo, checksum,
                                               object, length,
                                               cancellable, error))
@@ -78,9 +81,16 @@ import_one_object (OtLocalCloneData *data,
     }
   else
     {
+      gs_unref_variant GVariant *metadata = NULL;
+        
       if (objtype == OSTREE_OBJECT_TYPE_COMMIT)
         {
+          gboolean is_thin = FALSE;
           gs_unref_variant GVariant *detached_meta = NULL;
+
+          if (!ostree_repo_load_commit (data->src_repo, checksum, &metadata, &is_thin,
+                                        cancellable, error))
+            goto out;
           
           if (!ostree_repo_read_commit_detached_metadata (data->src_repo,
                                                           checksum, &detached_meta,
@@ -94,11 +104,23 @@ import_one_object (OtLocalCloneData *data,
                                                                cancellable, error))
                 goto out;
             }
+
+          if (!ostree_repo_write_commit_trusted (data->dest_repo,
+                                                 checksum, metadata, is_thin,
+                                                 cancellable, error))
+            goto out;
         }
-      if (!ostree_repo_write_metadata_stream_trusted (data->dest_repo, objtype,
-                                                      checksum, object, length,
-                                                      cancellable, error))
-        goto out;
+      else
+        {
+          if (!ostree_repo_load_variant (data->src_repo, objtype, checksum, &metadata,
+                                         error))
+            goto out;
+
+          if (!ostree_repo_write_metadata_trusted (data->dest_repo, objtype,
+                                                   checksum, metadata,
+                                                   cancellable, error))
+            goto out;
+        }
     }
 
   g_atomic_int_inc (&data->n_objects_copied);

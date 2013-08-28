@@ -155,6 +155,15 @@ gboolean      ostree_repo_write_metadata_finish (OstreeRepo        *self,
                                                  guchar           **out_csum,
                                                  GError           **error);
 
+
+void          ostree_repo_write_commit_async (OstreeRepo              *self,
+                                              const char              *expected_checksum,
+                                              GVariant                *object,
+                                              gboolean                 is_thin_commit,
+                                              GCancellable            *cancellable,
+                                              GAsyncReadyCallback      callback,
+                                              gpointer                 user_data);
+
 gboolean      ostree_repo_write_content (OstreeRepo       *self,
                                          const char       *expected_checksum,
                                          GInputStream     *object_input,
@@ -162,6 +171,13 @@ gboolean      ostree_repo_write_content (OstreeRepo       *self,
                                          guchar          **out_csum,
                                          GCancellable     *cancellable,
                                          GError          **error);
+
+gboolean      ostree_repo_write_commit_trusted (OstreeRepo        *self,
+                                                const char        *checksum,
+                                                GVariant          *variant,
+                                                gboolean           is_thin_commit,
+                                                GCancellable      *cancellable,
+                                                GError           **error);
 
 gboolean      ostree_repo_write_metadata_trusted (OstreeRepo        *self,
                                                   OstreeObjectType   objtype,
@@ -209,6 +225,13 @@ gboolean      ostree_repo_list_refs (OstreeRepo       *self,
                                      GHashTable      **out_all_refs,
                                      GCancellable     *cancellable,
                                      GError          **error);
+
+gboolean      ostree_repo_load_commit (OstreeRepo  *self,
+                                       const char    *sha256, 
+                                       GVariant     **out_variant,
+                                       gboolean      *out_is_thin,
+                                       GCancellable  *cancellable,
+                                       GError       **error);
 
 gboolean      ostree_repo_load_variant (OstreeRepo  *self,
                                         OstreeObjectType objtype,
@@ -453,9 +476,11 @@ gboolean ostree_repo_prune (OstreeRepo        *self,
 /**
  * OstreeRepoPullFlags:
  * @OSTREE_REPO_PULL_FLAGS_NONE: No special options for pull
+ * @OSTREE_REPO_PULL_FLAGS_COMMIT_ONLY: Only fetch the commit object
  */
 typedef enum {
-  OSTREE_REPO_PULL_FLAGS_NONE
+  OSTREE_REPO_PULL_FLAGS_NONE     = 0x00,
+  OSTREE_REPO_PULL_FLAGS_COMMIT_ONLY = 0x01,
 } OstreeRepoPullFlags;
 
 gboolean ostree_repo_pull (OstreeRepo             *self,

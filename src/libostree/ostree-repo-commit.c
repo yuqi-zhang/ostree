@@ -300,6 +300,7 @@ write_object (OstreeRepo         *self,
               const char         *expected_checksum,
               GInputStream       *input,
               guint64             file_object_length,
+              gboolean            is_thin_commit,
               guchar            **out_csum,
               GCancellable       *cancellable,
               GError            **error)
@@ -491,6 +492,17 @@ write_object (OstreeRepo         *self,
 
   if (do_commit)
     {
+      /* Override the loose path here for thin commits; we name them
+       * as "committhin", even though we checked for just "commit"
+       * above.  This is mildly lame in that attempting to store thin
+       * commits will rewrite the existing object, but it doesn't
+       * really matter.  Trying to do better would result in even
+       * *more* conditionals in this already heavily conditional
+       * function.
+       */
+      if (objtype == OSTREE_OBJECT_TYPE_COMMIT && is_thin_commit)
+        _ostree_loose_path_with_suffix (loose_objpath, actual_checksum, objtype, self->mode, "thin");
+          
       if (!commit_loose_object_trusted (self, objtype, loose_objpath,
                                         temp_file, temp_filename,
                                         is_symlink, file_info,
@@ -977,7 +989,7 @@ ostree_repo_write_metadata (OstreeRepo         *self,
   normalized = g_variant_get_normal_form (object);
   input = ot_variant_read (normalized);
 
-  return write_object (self, objtype, expected_checksum, input, 0, out_csum,
+  return write_object (self, objtype, expected_checksum, input, 0, FALSE, out_csum,
                        cancellable, error);
 }
 
@@ -1004,7 +1016,7 @@ ostree_repo_write_metadata_stream_trusted (OstreeRepo        *self,
                                            GError           **error)
 {
   /* Ignore provided length for now */
-  return write_object (self, objtype, checksum, object_input, 0, NULL,
+  return write_object (self, objtype, checksum, object_input, 0, FALSE, NULL,
                        cancellable, error);
 }
 
@@ -1034,13 +1046,48 @@ ostree_repo_write_metadata_trusted (OstreeRepo         *self,
   normalized = g_variant_get_normal_form (variant);
   input = ot_variant_read (normalized);
 
-  return write_object (self, type, checksum, input, 0, NULL,
+  return write_object (self, type, checksum, input, 0, FALSE, NULL,
+                       cancellable, error);
+}
+
+/**
+ * ostree_repo_write_commit_trusted:
+ * @self: Repo
+ * @checksum: Checksum for new commit object
+ * @variant: Commit object
+ * @is_thin_commit: If %TRUE, the commit is "thin"; i.e. other metadata/content is not stored
+ * @cancellable: Cancellable
+ * @error: Error
+ *
+ * Store the commit object @variant; the provided @checksum is
+ * trusted.
+ *
+ * Set @is_thin_commit if the other metadata and content objects
+ * referenced by @object will not also be stored.
+ */
+gboolean
+ostree_repo_write_commit_trusted (OstreeRepo        *self,
+                                  const char        *checksum,
+                                  GVariant          *variant,
+                                  gboolean           is_thin_commit,
+                                  GCancellable      *cancellable,
+                                  GError           **error)
+{
+  gs_unref_object GInputStream *input = NULL;
+  gs_unref_variant GVariant *normalized = NULL;
+
+  normalized = g_variant_get_normal_form (variant);
+  input = ot_variant_read (normalized);
+
+  return write_object (self, OSTREE_OBJECT_TYPE_COMMIT, checksum, input,
+                       0, is_thin_commit, NULL,
                        cancellable, error);
 }
 
 typedef struct {
   OstreeRepo *repo;
   OstreeObjectType objtype;
+  gboolean is_thin_commit;
   char *expected_checksum;
   GVariant *object;
   GCancellable *cancellable;
@@ -1069,12 +1116,17 @@ write_metadata_thread (GSimpleAsyncResult  *res,
 {
   GError *error = NULL;
   WriteMetadataAsyncData *data;
+  gs_unref_object GInputStream *input = NULL;
+  gs_unref_variant GVariant *normalized = NULL;
 
   data = g_simple_async_result_get_op_res_gpointer (res);
-  if (!ostree_repo_write_metadata (data->repo, data->objtype, data->expected_checksum,
-                                   data->object,
-                                   &data->result_csum,
-                                   cancellable, &error))
+
+  normalized = g_variant_get_normal_form (data->object);
+  input = ot_variant_read (normalized);
+
+  if (!write_object (data->repo, data->objtype, data->expected_checksum,
+                     input, 0, data->is_thin_commit, &data->result_csum,
+                     cancellable, &error))
     g_simple_async_result_take_error (res, error);
 }
 
@@ -1140,6 +1192,52 @@ ostree_repo_write_metadata_finish (OstreeRepo        *self,
   return TRUE;
 }
 
+/**
+ * ostree_repo_write_commit_async:
+ * @self: Repo
+ * @expected_checksum: (allow-none): If provided, validate content against this checksum
+ * @object: Commit object
+ * @is_thin_commit: If %TRUE, the commit is "thin"; i.e. other metadata/content is not stored
+ * @cancellable: Cancellable
+ * @callback: Invoked when metadata is writed
+ * @user_data: Data for @callback
+ *
+ * Asynchronously store the commit object @object.  If provided, the
+ * checksum @expected_checksum will be verified.
+ *
+ * Set @is_thin_commit if the other metadata and content objects
+ * referenced by @object will not also be stored.
+ */
+void
+ostree_repo_write_commit_async (OstreeRepo              *self,
+                                 const char              *expected_checksum,
+                                 GVariant                *object,
+                                 gboolean                 is_thin_commit,
+                                 GCancellable            *cancellable,
+                                 GAsyncReadyCallback      callback,
+                                 gpointer                 user_data)
+{
+  WriteMetadataAsyncData *asyncdata;
+
+  asyncdata = g_new0 (WriteMetadataAsyncData, 1);
+  asyncdata->is_thin_commit = is_thin_commit;
+  asyncdata->repo = g_object_ref (self);
+  asyncdata->objtype = OSTREE_OBJECT_TYPE_COMMIT;
+  asyncdata->expected_checksum = g_strdup (expected_checksum);
+  asyncdata->object = g_variant_ref (object);
+  asyncdata->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
+
+  asyncdata->result = g_simple_async_result_new ((GObject*) self,
+                                                 callback, user_data,
+                                                 ostree_repo_write_metadata_async);
+
+  g_simple_async_result_set_op_res_gpointer (asyncdata->result, asyncdata,
+                                             write_metadata_async_data_free);
+  g_simple_async_result_run_in_thread (asyncdata->result, write_metadata_thread, G_PRIORITY_DEFAULT, cancellable);
+  g_object_unref (asyncdata->result);
+
+}
+
 gboolean
 _ostree_repo_write_directory_meta (OstreeRepo   *self,
                                    GFileInfo    *file_info,
@@ -1201,7 +1299,7 @@ ostree_repo_write_content_trusted (OstreeRepo       *self,
                                    GError          **error)
 {
   return write_object (self, OSTREE_OBJECT_TYPE_FILE, checksum,
-                       object_input, length, NULL,
+                       object_input, length, FALSE, NULL,
                        cancellable, error);
 }
 
@@ -1229,7 +1327,7 @@ ostree_repo_write_content (OstreeRepo       *self,
                            GError          **error)
 {
   return write_object (self, OSTREE_OBJECT_TYPE_FILE, expected_checksum,
-                       object_input, length, out_csum,
+                       object_input, length, FALSE, out_csum,
                        cancellable, error);
 }
 

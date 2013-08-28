@@ -137,5 +137,6 @@ _ostree_repo_commit_modifier_apply (OstreeRepo               *self,
                                     GFileInfo                *file_info,
                                     GFileInfo               **out_modified_info);
 
+
 G_END_DECLS
 
