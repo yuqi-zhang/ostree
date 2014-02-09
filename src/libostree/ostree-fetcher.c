@@ -568,7 +568,7 @@ _ostree_fetcher_request_uri_with_partial_async (OstreeFetcher         *self,
   if (local_error != NULL)
     {
       g_simple_async_result_take_error (pending->result, local_error);
-      g_simple_async_result_complete (pending->result);
+      g_simple_async_result_complete_in_idle (pending->result);
       g_object_unref (pending->result);
     }
 }
