@@ -1030,6 +1030,7 @@ ostree_repo_pull (OstreeRepo               *self,
   gs_free char *remote_key = NULL;
   gs_free char *path = NULL;
   gs_free char *baseurl = NULL;
+  gs_free char *metalink_url = NULL;
   gs_unref_hashtable GHashTable *requested_refs_to_fetch = NULL;
   gs_unref_hashtable GHashTable *commits_to_fetch = NULL;
   gs_free char *remote_mode_str = NULL;
@@ -1070,10 +1071,28 @@ ostree_repo_pull (OstreeRepo               *self,
                    remote_key);
       goto out;
     }
-  if (!repo_get_string_key_inherit (self, remote_key, "url", &baseurl, error))
+
+  if (!ot_keyfile_get_value_with_default (self, remote_key, "metalink", &metalink_url, error))
     goto out;
 
+  if (!metalink_url)
+    {
+      if (!repo_get_string_key_inherit (self, remote_key, "url", &baseurl, error))
+        goto out;
+    }
+  else
+    {
+      FIXME - need to retrieve the metalink value, extract checksum for ref from it
+    }
+
   pull_data->base_uri = soup_uri_new (baseurl);
+
+  if (!pull_data->base_uri)
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                   "Failed to parse url '%s'", baseurl);
+      goto out;
+    }
 
 #ifdef HAVE_GPGME
   if (!ot_keyfile_get_boolean_with_default (config, remote_key, "gpg-verify",
@@ -1147,13 +1166,6 @@ ostree_repo_pull (OstreeRepo               *self,
         _ostree_fetcher_set_tls_database (pull_data->fetcher, db);
       }
   }
-
-  if (!pull_data->base_uri)
-    {
-      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                   "Failed to parse url '%s'", baseurl);
-      goto out;
-    }
 
   if (!load_remote_repo_config (pull_data, &remote_config, cancellable, error))
     goto out;
