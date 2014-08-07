@@ -2257,3 +2257,73 @@ out:
     (void) gs_file_unlink (commit_tmp_path, NULL, NULL);
   return ret;
 }
+
+/**
+ * ostree_repo_regenerate_summary:
+ * @self: Repo
+ * @cancellable: Cancellable
+ * @error: Error
+ *
+ * An OSTree repository can contain a high level "summary" file that
+ * describes the available branches and other metadata.
+ *
+ * It is not regenerated automatically when commits are created; this
+ * API is available to atomically regenerate the summary after
+ * multiple commits.  It should only be invoked by one process at a
+ * time.
+ */
+gboolean
+ostree_repo_regenerate_summary (OstreeRepo     *self,
+                                GCancellable   *cancellable,
+                                GError        **error)
+{
+  gboolean ret = FALSE;
+  gs_unref_hashtable GHashTable *refs = NULL;
+  gs_unref_hashtable GHashTable *commits = NULL;
+  gs_unref_variant_builder GVariantBuilder *builder = NULL;
+  GList *ordered_refs = NULL;
+  GList *iter = NULL;
+  GHashTableIter hashiter;
+  gpointer hkey, hvalue;
+
+  if (!ostree_repo_list_refs (self, NULL, &refs, cancellable, error))
+    goto out;
+
+  commits = g_hash_table_new (g_str_hash, g_str_equal, g_free, g_variant_unref);
+
+  builder = g_variant_builder_new ("a(ayay)");
+
+  ordered_refs = g_hash_table_get_keys (refs);
+  ordered_refs = g_list_sort (ordered_refs, (GCompareFunc)strcmp);
+  
+  for (iter = ordered_refs; iter; iter = iter->next)
+    {
+      const char *ref = iter->data;
+      const char *commit = g_hash_table_lookup (refs, ref);
+      guint8 csum[32];
+
+      g_assert (commit);
+
+      if (!g_hash_table_lookup (commits, commit))
+        {
+          gs_unref_variant GVariant *commit_content = NULL;
+
+          if (!ostree_repo_load_variant (repo, OSTREE_OBJECT_TYPE_COMMIT, commit,
+                                         &commit_content, error))
+            goto out;
+
+          g_hash_table_insert (commits, commit, g_variant_ref (commit_content));
+        }
+
+      ostree_checksum_inplace_to_bytes (commit, csum);
+
+      g_variant_builder_add (
+    }
+
+  ret = TRUE;
+ out:
+  if (ordered_refs)
+    g_list_free (ordered_refs);
+  return ret;
+}
+

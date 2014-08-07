@@ -118,6 +118,15 @@ typedef enum {
 #define OSTREE_COMMIT_GVARIANT_FORMAT G_VARIANT_TYPE (OSTREE_COMMIT_GVARIANT_STRING)
 
 /**
+ * OSTREE_SUMMARY_GVARIANT_FORMAT:
+ *
+ * a(ayay) - Array of (checksum, commit data)
+ * refs: a{s(aya{sv})} - Map of ref name -> (latest commit, additional metadata)
+ */
+#define OSTREE_SUMMARY_GVARIANT_STRING "(a(ayay)a{s(aya{sv})})"
+#define OSTREE_SUMMARY_GVARIANT_FORMAT G_VARIANT_TYPE (OSTREE_SUMMARY_GVARIANT_STRING)
+
+/**
  * OstreeRepoMode:
  * @OSTREE_REPO_MODE_BARE: Files are stored as themselves; can only be written as root
  * @OSTREE_REPO_MODE_ARCHIVE_Z2: Files are compressed, should be owned by non-root.  Can be served via HTTP
