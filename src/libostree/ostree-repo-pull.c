@@ -1034,6 +1034,7 @@ ostree_repo_pull (OstreeRepo               *self,
   gs_unref_hashtable GHashTable *requested_refs_to_fetch = NULL;
   gs_unref_hashtable GHashTable *commits_to_fetch = NULL;
   gs_free char *remote_mode_str = NULL;
+  gs_unref_object OstreeMetalink *metalink = NULL;
   OtPullData pull_data_real = { 0, };
   OtPullData *pull_data = &pull_data_real;
   GKeyFile *config = NULL;
@@ -1072,26 +1073,34 @@ ostree_repo_pull (OstreeRepo               *self,
       goto out;
     }
 
-  if (!ot_keyfile_get_value_with_default (self, remote_key, "metalink", &metalink_url, error))
+  if (!repo_get_string_key_inherit (self, remote_key, "metalink", &metalink_url, error))
     goto out;
 
   if (!metalink_url)
     {
       if (!repo_get_string_key_inherit (self, remote_key, "url", &baseurl, error))
         goto out;
+
+      pull_data->base_uri = soup_uri_new (baseurl);
+
+      if (!pull_data->base_uri)
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                       "Failed to parse url '%s'", baseurl);
+          goto out;
+        }
     }
   else
     {
-      FIXME - need to retrieve the metalink value, extract checksum for ref from it
-    }
+      gs_unref_object GFile *metalink_data = NULL;
+      SoupURI *metalink_uri = soup_uri_new (metalink_url);
+      metalink = _ostree_metalink_new (pull_data->fetcher, metalink_url, OSTREE_MAX_METADATA_SIZE, metalink_uri);
+      g_object_unref (metalink_uri);
 
-  pull_data->base_uri = soup_uri_new (baseurl);
-
-  if (!pull_data->base_uri)
-    {
-      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                   "Failed to parse url '%s'", baseurl);
-      goto out;
+      if (!_ostree_metalink_request_sync (metalink, &pull_data->base_uri,
+                                          &metalink_data,
+                                          cancellable, error))
+        goto out;
     }
 
 #ifdef HAVE_GPGME
