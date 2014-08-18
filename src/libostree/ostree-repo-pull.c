@@ -26,7 +26,7 @@
 #include "ostree-core-private.h"
 #include "ostree-repo-private.h"
 #include "ostree-repo-static-delta-private.h"
-#include "ostree-fetcher.h"
+#include "ostree-metalink.h"
 #include "otutil.h"
 
 typedef struct {

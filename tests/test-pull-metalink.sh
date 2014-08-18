@@ -1,0 +1,68 @@
+#!/bin/bash
+#
+# Copyright (C) 2014 Colin Walters <walters@verbum.org>
+#
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2 of the License, or (at your option) any later version.
+#
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the
+# Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+# Boston, MA 02111-1307, USA.
+
+set -e
+
+. $(dirname $0)/libtest.sh
+
+setup_fake_remote_repo1 "archive-z2"
+
+# And another web server acting as the metalink server
+cd ${test_tmpdir}
+mkdir metalink-data
+cd metalink-data
+ostree trivial-httpd --daemonize -p ${test_tmpdir}/metalink-httpd-port
+metalink_port=$(cat ${test_tmpdir}/metalink-httpd-port)
+echo "http://127.0.0.1:${metalink_port}" > ${test_tmpdir}/metalink-httpd-address
+
+ostree --repo=${test_tmpdir}/ostree-srv/gnomerepo summary -u
+
+summary_path=${test_tmpdir}/ostree-srv/gnomerepo/summary
+
+echo '1..1'
+cd ${test_tmpdir}
+
+cat <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<metalink version="3.0" xmlns="http://www.metalinker.org/">
+  <files>
+    <file name="summary">
+      <size>$(stat -c '%s' ${summary_path})</size>
+      <verification>
+        <hash type="md5">$(md5sum ${summary_path} | cut -f 1 -d ' ')</hash>
+        <hash type="sha256">$(sha256sum ${summary_path} | cut -f 1 -d ' ')</hash>
+        <hash type="sha512">$(sha512sum ${summary_path} | cut -f 1 -d ' ')</hash>
+      </verification>
+      <resources maxconnections="1">
+        <url protocol="http" type="http" location="US" preference="100" >$(cat httpd-address)</url>
+      </resources>
+    </file>
+  </files>
+</metalink>
+EOF
+
+cd ${test_tmpdir}
+mkdir repo
+${CMD_PREFIX} ostree --repo=repo init
+${CMD_PREFIX} ostree --repo=repo remote add --set=gpg-verify=false origin metalink=$(cat httpd-address)/ostree/gnomerepo
+# Try both syntaxes
+${CMD_PREFIX} ostree --repo=repo pull origin main
+${CMD_PREFIX} ostree --repo=repo pull origin:main
+${CMD_PREFIX} ostree --repo=repo fsck
+echo "ok pull"

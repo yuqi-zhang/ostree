@@ -379,7 +379,7 @@ GS_DEFINE_CLEANUP_FUNCTION0(GKeyFile*, local_keyfile_unref, g_key_file_unref)
  * ostree_repo_remote_add:
  * @self: Repo
  * @name: Name of remote
- * @url: URL for remote
+ * @url: URL for remote (if URL begins with metalink=, it will be used as such)
  * @options: (allow-none): GVariant of type a{sv}
  * @cancellable: Cancellable
  * @error: Error
@@ -444,7 +444,11 @@ ostree_repo_remote_add (OstreeRepo     *self,
       target_keyfile = ostree_repo_copy_config (self);
     }
 
-  g_key_file_set_string (target_keyfile, section, "url", url);
+  if (g_str_has_prefix (url, "metalink="))
+    g_key_file_set_string (target_keyfile, section, "metalink", url + strlen ("metalink="));
+  else
+    g_key_file_set_string (target_keyfile, section, "url", url);
+
   if (options)
     keyfile_set_from_vardict (target_keyfile, section, options);
 
@@ -2286,7 +2290,6 @@ ostree_repo_regenerate_summary (OstreeRepo     *self,
   GList *ordered_keys = NULL;
   GList *iter = NULL;
   GHashTableIter hashiter;
-  gpointer hkey, hvalue;
 
   if (!ostree_repo_list_refs (self, NULL, &refs, cancellable, error))
     goto out;

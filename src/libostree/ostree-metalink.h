@@ -60,11 +60,11 @@ void _ostree_metalink_request_async (OstreeMetalink         *self,
                                      GAsyncReadyCallback    callback,
                                      gpointer               user_data);
 
-gboolean_ostree_metalink_request_finish (OstreeMetalink         *self,
-                                         GAsyncResult           *result,
-                                         SoupURI               **out_target_uri,
-                                         GFile                 **out_data,
-                                         GError                **error);
+gboolean _ostree_metalink_request_finish (OstreeMetalink         *self,
+                                          GAsyncResult           *result,
+                                          SoupURI               **out_target_uri,
+                                          GFile                 **out_data,
+                                          GError                **error);
 
 G_END_DECLS
 
