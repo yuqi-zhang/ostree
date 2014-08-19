@@ -106,7 +106,8 @@ metalink_parser_start (GMarkupParseContext  *context,
                        gpointer              user_data,
                        GError              **error)
 {
-  OstreeMetalinkRequest *self = user_data;
+  GTask *task = user_data;
+  OstreeMetalinkRequest *self = g_task_get_task_data (task);
 
   switch (self->state)
     {
@@ -176,7 +177,7 @@ metalink_parser_start (GMarkupParseContext  *context,
     case OSTREE_METALINK_STATE_VERIFICATION:
       if (strcmp (element_name, "hash") == 0)
         {
-          gs_free char *verification_type_str = NULL;
+           char *verification_type_str = NULL;
 
           state_transition (self, OSTREE_METALINK_STATE_HASH);
           if (!g_markup_collect_attributes (element_name,
@@ -184,7 +185,7 @@ metalink_parser_start (GMarkupParseContext  *context,
                                             attribute_values,
                                             error,
                                             G_MARKUP_COLLECT_STRING,
-                                            "name",
+                                            "type",
                                             &verification_type_str,
                                             G_MARKUP_COLLECT_INVALID))
             goto out;
@@ -229,6 +230,15 @@ metalink_parser_start (GMarkupParseContext  *context,
                                             G_MARKUP_COLLECT_STRING,
                                             "protocol",
                                             &protocol,
+                                            G_MARKUP_COLLECT_STRING,
+                                            "type",
+                                            NULL,
+                                            G_MARKUP_COLLECT_STRING,
+                                            "location",
+                                            NULL,
+                                            G_MARKUP_COLLECT_STRING,
+                                            "preference",
+                                            NULL,
                                             G_MARKUP_COLLECT_INVALID))
             goto out;
 
@@ -259,6 +269,40 @@ metalink_parser_end (GMarkupParseContext  *context,
                      gpointer              user_data,
                      GError              **error)
 {
+  GTask *task = user_data;
+  OstreeMetalinkRequest *self = g_task_get_task_data (task);
+
+  switch (self->state)
+    {
+    case OSTREE_METALINK_STATE_INITIAL:
+      break;
+    case OSTREE_METALINK_STATE_METALINK:
+      state_transition (self, OSTREE_METALINK_STATE_INITIAL);
+      break;
+    case OSTREE_METALINK_STATE_FILES:
+      state_transition (self, OSTREE_METALINK_STATE_METALINK);
+      break;
+    case OSTREE_METALINK_STATE_FILE:
+      state_transition (self, OSTREE_METALINK_STATE_FILES);
+      break;
+    case OSTREE_METALINK_STATE_SIZE:
+    case OSTREE_METALINK_STATE_VERIFICATION:
+    case OSTREE_METALINK_STATE_RESOURCES:
+      state_transition (self, OSTREE_METALINK_STATE_FILE);
+      break;
+    case OSTREE_METALINK_STATE_HASH:
+      state_transition (self, OSTREE_METALINK_STATE_VERIFICATION);
+      break;
+    case OSTREE_METALINK_STATE_URL:
+      state_transition (self, OSTREE_METALINK_STATE_RESOURCES);
+      break;
+    case OSTREE_METALINK_STATE_PASSTHROUGH:
+      g_assert_cmpint (self->passthrough_depth, >, 0);
+      self->passthrough_depth--;
+      if (self->passthrough_depth == 0)
+        state_transition (self, self->passthrough_previous);
+      break;
+    }
 }
 
 static void
@@ -268,7 +312,8 @@ metalink_parser_text (GMarkupParseContext *context,
                       gpointer             user_data,
                       GError             **error)
 {
-  OstreeMetalinkRequest *self = user_data;
+  GTask *task = user_data;
+  OstreeMetalinkRequest *self = g_task_get_task_data (task);
 
   switch (self->state)
     {
@@ -605,7 +650,7 @@ ostree_metalink_request_unref (gpointer data)
                                
 static const GMarkupParser metalink_parser = {
   metalink_parser_start,
-    metalink_parser_end,
+  metalink_parser_end,
   metalink_parser_text,
   NULL,
   NULL
