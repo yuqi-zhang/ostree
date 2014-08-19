@@ -36,7 +36,6 @@ ostree_builtin_summary (int argc, char **argv, OstreeRepo *repo, GCancellable *c
 {
   gboolean ret = FALSE;
   GOptionContext *context;
-  gs_unref_ptrarray GPtrArray *delta_names = NULL;
 
   context = g_option_context_new ("Manage summary metadata");
   g_option_context_add_main_entries (context, options, NULL);

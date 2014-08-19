@@ -62,5 +62,6 @@ mkdir repo
 ${CMD_PREFIX} ostree --repo=repo init
 ${CMD_PREFIX} ostree --repo=repo remote add --set=gpg-verify=false origin metalink=$(cat metalink-httpd-address)/metalink.xml
 ${CMD_PREFIX} ostree --repo=repo pull origin:main
+${CMD_PREFIX} ostree --repo=repo rev-parse origin:main
 ${CMD_PREFIX} ostree --repo=repo fsck
 echo "ok pull via metalink"

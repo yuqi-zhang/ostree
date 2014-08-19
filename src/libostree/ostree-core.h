@@ -120,10 +120,10 @@ typedef enum {
 /**
  * OSTREE_SUMMARY_GVARIANT_FORMAT:
  *
- * a(ayay) - Array of (checksum, commit data)
- * refs: a{s(aya{sv})} - Map of ref name -> (latest commit, additional metadata)
+ * a(ayay) - Array of (checksum, commit data), sorted by checksum
+ * refs: a(s(aya{sv})) - Map of ref name -> (latest commit, additional metadata), sorted by ref name
  */
-#define OSTREE_SUMMARY_GVARIANT_STRING "(a(ayay)a{s(aya{sv})})"
+#define OSTREE_SUMMARY_GVARIANT_STRING "(a(ayay)a(s(aya{sv})))"
 #define OSTREE_SUMMARY_GVARIANT_FORMAT G_VARIANT_TYPE (OSTREE_SUMMARY_GVARIANT_STRING)
 
 /**

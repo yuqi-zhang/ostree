@@ -327,8 +327,9 @@ _ostree_metalink_finalize (GObject *object)
 
   self = OSTREE_METALINK (object);
 
+  g_object_unref (self->fetcher);
   g_free (self->requested_file);
-  g_clear_object (&self->uri);
+  soup_uri_free (self->uri);
 
   G_OBJECT_CLASS (_ostree_metalink_parent_class)->finalize (object);
 }
@@ -354,9 +355,10 @@ _ostree_metalink_new (OstreeFetcher  *fetcher,
 {
   OstreeMetalink *self = (OstreeMetalink*)g_object_new (OSTREE_TYPE_METALINK, NULL);
 
+  self->fetcher = g_object_ref (fetcher);
   self->requested_file = g_strdup (requested_file);
   self->max_size = max_size;
-  self->uri = g_object_ref (uri);
+  self->uri = soup_uri_copy (uri);
  
   return self;
 }
@@ -685,11 +687,18 @@ _ostree_metalink_request_sync (OstreeMetalink         *self,
   gboolean ret = FALSE;
   GMainContext *sync_context = g_main_context_new ();
   MetalinkSyncCallState state = { 0, };
+
+  state.error = error;
+  state.running = TRUE;
+
+  g_main_context_push_thread_default (sync_context);
   
   _ostree_metalink_request_async (self, cancellable, on_async_result, &state);
   
   while (state.running)
     g_main_context_iteration (sync_context, TRUE);
+
+  g_main_context_pop_thread_default (sync_context);
 
   ret = state.success;
   if (sync_context)

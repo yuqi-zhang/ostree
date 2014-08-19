@@ -52,6 +52,7 @@ typedef struct {
   
   gboolean          gpg_verify;
 
+  GVariant         *summary;
   GPtrArray        *static_delta_metas;
   GHashTable       *scanned_metadata; /* Maps object name to itself */
   GHashTable       *requested_metadata; /* Maps object name to itself */
@@ -477,6 +478,41 @@ fetch_ref_contents (OtPullData    *pull_data,
  out:
   if (target_uri)
     soup_uri_free (target_uri);
+  return ret;
+}
+
+static gboolean
+lookup_commit_checksum_from_summary (OtPullData    *pull_data,
+                                     const char    *ref,
+                                     char         **out_checksum,
+                                     GError       **error)
+{
+  gboolean ret = FALSE;
+  gs_unref_variant GVariant *commits = g_variant_get_child_value (pull_data->summary, 0);
+  gs_unref_variant GVariant *refs = g_variant_get_child_value (pull_data->summary, 1);
+  gs_unref_variant GVariant *refdata = NULL;
+  gs_unref_variant GVariant *commit_data = NULL;
+  gs_unref_variant GVariant *commit_csum_v = NULL;
+  gs_unref_bytes GBytes *commit_bytes = NULL;
+  int i;
+  
+  if (!ot_variant_bsearch_str (refs, ref, &i))
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                   "No such branch '%s' in repository summary",
+                   ref);
+      goto out;
+    }
+      
+  refdata = g_variant_get_child_value (refs, i);
+  commit_csum_v = g_variant_get_child_value (refdata, 0);
+
+  if (!ostree_validate_structureof_csum_v (commit_csum_v, error))
+    goto out;
+
+  ret = TRUE;
+  *out_checksum = ostree_checksum_from_bytes_v (commit_csum_v);
+ out:
   return ret;
 }
 
@@ -1030,7 +1066,7 @@ ostree_repo_pull (OstreeRepo               *self,
   gs_free char *remote_key = NULL;
   gs_free char *path = NULL;
   gs_free char *baseurl = NULL;
-  gs_free char *metalink_url = NULL;
+  gs_free char *metalink_url_str = NULL;
   gs_unref_hashtable GHashTable *requested_refs_to_fetch = NULL;
   gs_unref_hashtable GHashTable *commits_to_fetch = NULL;
   gs_free char *remote_mode_str = NULL;
@@ -1071,38 +1107,6 @@ ostree_repo_pull (OstreeRepo               *self,
                    "No remote '%s' found in " SYSCONFDIR "/ostree/remotes.d",
                    remote_key);
       goto out;
-    }
-
-  if (!repo_get_string_key_inherit (self, remote_key, "metalink", &metalink_url, error))
-    goto out;
-
-  if (!metalink_url)
-    {
-      if (!repo_get_string_key_inherit (self, remote_key, "url", &baseurl, error))
-        goto out;
-
-      pull_data->base_uri = soup_uri_new (baseurl);
-
-      if (!pull_data->base_uri)
-        {
-          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                       "Failed to parse url '%s'", baseurl);
-          goto out;
-        }
-    }
-  else
-    {
-      gs_unref_object GFile *metalink_data = NULL;
-      SoupURI *metalink_uri = soup_uri_new (metalink_url);
-      metalink = _ostree_metalink_new (pull_data->fetcher, metalink_url, OSTREE_MAX_METADATA_SIZE, metalink_uri);
-      g_object_unref (metalink_uri);
-
-      if (!_ostree_metalink_request_sync (metalink, &pull_data->base_uri,
-                                          &metalink_data,
-                                          cancellable, error))
-        goto out;
-
-      
     }
 
 #ifdef HAVE_GPGME
@@ -1178,6 +1182,48 @@ ostree_repo_pull (OstreeRepo               *self,
       }
   }
 
+  if (!repo_get_string_key_inherit (self, remote_key, "metalink", &metalink_url_str, error))
+    goto out;
+
+  if (!metalink_url_str)
+    {
+      if (!repo_get_string_key_inherit (self, remote_key, "url", &baseurl, error))
+        goto out;
+
+      pull_data->base_uri = soup_uri_new (baseurl);
+
+      if (!pull_data->base_uri)
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                       "Failed to parse url '%s'", baseurl);
+          goto out;
+        }
+    }
+  else
+    {
+      gs_unref_object GFile *metalink_data = NULL;
+      SoupURI *metalink_uri = soup_uri_new (metalink_url_str);
+      
+      if (!metalink_uri)
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                       "Invalid metalink URL: %s", metalink_url_str);
+          goto out;
+        }
+      
+      metalink = _ostree_metalink_new (pull_data->fetcher, "summary", OSTREE_MAX_METADATA_SIZE, metalink_uri);
+      soup_uri_free (metalink_uri);
+
+      if (!_ostree_metalink_request_sync (metalink, &pull_data->base_uri,
+                                          &metalink_data,
+                                          cancellable, error))
+        goto out;
+
+      if (!ot_util_variant_map (metalink_data, OSTREE_SUMMARY_GVARIANT_FORMAT, FALSE,
+                                &pull_data->summary, error))
+        goto out;
+    }
+
   if (!load_remote_repo_config (pull_data, &remote_config, cancellable, error))
     goto out;
 
@@ -1207,7 +1253,6 @@ ostree_repo_pull (OstreeRepo               *self,
       for (strviter = refs_to_fetch; *strviter; strviter++)
         {
           const char *branch = *strviter;
-          char *contents;
 
           if (ostree_validate_checksum_string (branch, NULL))
             {
@@ -1216,11 +1261,7 @@ ostree_repo_pull (OstreeRepo               *self,
             }
           else
             {
-              if (!fetch_ref_contents (pull_data, branch, &contents, cancellable, error))
-                goto out;
-      
-              /* Transfer ownership of contents */
-              g_hash_table_insert (requested_refs_to_fetch, g_strdup (branch), contents);
+              g_hash_table_insert (requested_refs_to_fetch, g_strdup (branch), NULL);
             }
         }
     }
@@ -1240,14 +1281,29 @@ ostree_repo_pull (OstreeRepo               *self,
       for (;branches_iter && *branches_iter; branches_iter++)
         {
           const char *branch = *branches_iter;
-          char *contents;
               
+          g_hash_table_insert (requested_refs_to_fetch, g_strdup (branch), NULL);
+        }
+    }
+
+  while (g_hash_table_iter_next (&hash_iter, &key, &value))
+    {
+      const char *branch = key;
+      char *contents;
+
+      if (pull_data->summary)
+        {
+          if (!lookup_commit_checksum_from_summary (pull_data, branch, &contents, error))
+            goto out;
+        }
+      else
+        {
           if (!fetch_ref_contents (pull_data, branch, &contents, cancellable, error))
             goto out;
-
-          /* Transfer ownership of contents */
-          g_hash_table_insert (requested_refs_to_fetch, g_strdup (branch), contents);
         }
+      
+      /* Transfer ownership of contents */
+      g_hash_table_replace (requested_refs_to_fetch, g_strdup (branch), contents);
     }
 
   pull_data->phase = OSTREE_PULL_PHASE_FETCHING_OBJECTS;
@@ -1348,6 +1404,7 @@ ostree_repo_pull (OstreeRepo               *self,
   g_free (pull_data->remote_name);
   if (pull_data->base_uri)
     soup_uri_free (pull_data->base_uri);
+  g_clear_pointer (&pull_data->summary, (GDestroyNotify) g_variant_unref);
   g_clear_pointer (&pull_data->static_delta_metas, (GDestroyNotify) g_ptr_array_unref);
   g_clear_pointer (&pull_data->scanned_metadata, (GDestroyNotify) g_hash_table_unref);
   g_clear_pointer (&pull_data->requested_content, (GDestroyNotify) g_hash_table_unref);
