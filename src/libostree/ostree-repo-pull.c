@@ -1101,6 +1101,8 @@ ostree_repo_pull (OstreeRepo               *self,
                                           &metalink_data,
                                           cancellable, error))
         goto out;
+
+      
     }
 
 #ifdef HAVE_GPGME

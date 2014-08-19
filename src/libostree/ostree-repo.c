@@ -2296,7 +2296,7 @@ ostree_repo_regenerate_summary (OstreeRepo     *self,
 
   commits = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_variant_unref);
 
-  refs_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{s(aya{sv})}"));
+  refs_builder = g_variant_builder_new (G_VARIANT_TYPE ("a(s(aya{sv}))"));
 
   ordered_keys = g_hash_table_get_keys (refs);
   ordered_keys = g_list_sort (ordered_keys, (GCompareFunc)strcmp);
@@ -2338,13 +2338,17 @@ ostree_repo_regenerate_summary (OstreeRepo     *self,
       const char *commit = iter->data;
       GVariant *commit_content = g_hash_table_lookup (commits, commit);
       gs_unref_variant GVariant *csum_v = NULL;
+      gs_unref_bytes GBytes *commit_data; 
+      gs_unref_variant GVariant *commit_data_v;
 
       g_assert (commit_content);
 
       csum_v = ostree_checksum_to_bytes_v (commit);
+      commit_data = g_variant_get_data_as_bytes (commit_content);
+      commit_data_v = g_variant_new_from_bytes (G_VARIANT_TYPE ("ay"), commit_data, TRUE);
 
       g_variant_builder_add_value (commits_builder, 
-                                   g_variant_new ("(@ay@ay))", csum_v, commit_content));
+                                   g_variant_new ("(@ay@ay)", csum_v, commit_data_v));
     }
 
   {

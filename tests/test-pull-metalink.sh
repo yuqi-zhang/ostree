@@ -38,7 +38,7 @@ summary_path=${test_tmpdir}/ostree-srv/gnomerepo/summary
 echo '1..1'
 cd ${test_tmpdir}
 
-cat <<EOF
+cat > ${test_tmpdir}/metalink-data/metalink.xml <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <metalink version="3.0" xmlns="http://www.metalinker.org/">
   <files>
@@ -60,9 +60,7 @@ EOF
 cd ${test_tmpdir}
 mkdir repo
 ${CMD_PREFIX} ostree --repo=repo init
-${CMD_PREFIX} ostree --repo=repo remote add --set=gpg-verify=false origin metalink=$(cat httpd-address)/ostree/gnomerepo
-# Try both syntaxes
-${CMD_PREFIX} ostree --repo=repo pull origin main
+${CMD_PREFIX} ostree --repo=repo remote add --set=gpg-verify=false origin metalink=$(cat metalink-httpd-address)/metalink.xml
 ${CMD_PREFIX} ostree --repo=repo pull origin:main
 ${CMD_PREFIX} ostree --repo=repo fsck
-echo "ok pull"
+echo "ok pull via metalink"
