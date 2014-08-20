@@ -50,7 +50,8 @@ cat > ${test_tmpdir}/metalink-data/metalink.xml <<EOF
         <hash type="sha512">$(sha512sum ${summary_path} | cut -f 1 -d ' ')</hash>
       </verification>
       <resources maxconnections="1">
-        <url protocol="http" type="http" location="US" preference="100" >$(cat httpd-address)</url>
+        <url protocol="http" type="http" location="US" preference="100" >$(cat httpd-address)/ostree/gnomerepo/enoent</url>
+        <url protocol="http" type="http" location="US" preference="99" >$(cat httpd-address)/ostree/gnomerepo/summary</url>
       </resources>
     </file>
   </files>
@@ -65,3 +66,52 @@ ${CMD_PREFIX} ostree --repo=repo pull origin:main
 ${CMD_PREFIX} ostree --repo=repo rev-parse origin:main
 ${CMD_PREFIX} ostree --repo=repo fsck
 echo "ok pull via metalink"
+
+cp metalink-data/metalink.xml{,.orig}
+cp ostree-srv/gnomerepo/summary{,.orig}
+
+test_metalink_pull_error() {
+    msg=$1
+    rm repo -rf
+    mkdir repo
+    ${CMD_PREFIX} ostree --repo=repo init
+    ${CMD_PREFIX} ostree --repo=repo remote add --set=gpg-verify=false origin metalink=$(cat metalink-httpd-address)/metalink.xml
+    if ${CMD_PREFIX} ostree --repo=repo pull origin:main 2>err.txt; then
+	assert_not_reached "pull unexpectedly succeeded"
+    fi
+    cat err.txt
+    assert_file_has_content err.txt "${msg}"
+}
+
+cd ${test_tmpdir}
+sed -e 's,<hash type="sha512">.*</hash>,<hash type="sha512">bacon</hash>,' < metalink-data/metalink.xml.orig > metalink-data/metalink.xml
+test_metalink_pull_error "Invalid hash digest for sha512"
+echo "ok metalink err hash format"
+
+cd ${test_tmpdir}
+sed -e 's,<hash type="sha512">.*</hash>,<hash type="sha512">'$( (echo -n dummy; cat ${summary_path}) | sha512sum | cut -f 1 -d ' ')'</hash>,' < metalink-data/metalink.xml.orig > metalink-data/metalink.xml
+test_metalink_pull_error "Expected checksum is .* but actual is"
+echo "ok metalink err hash sha512"
+
+cd ${test_tmpdir}
+cp metalink-data/metalink.xml.orig metalink-data/metalink.xml
+echo -n moo > ostree-srv/gnomerepo/summary
+test_metalink_pull_error "Expected size is .* bytes but content is 3 bytes"
+echo "ok metalink err size"
+cp ostree-srv/gnomerepo/summary{.orig,}
+
+cd ${test_tmpdir}
+grep -v sha256 < metalink-data/metalink.xml.orig |grep -v sha512 > metalink-data/metalink.xml
+test_metalink_pull_error "No.*verification.*with known.*hash"
+echo "ok metalink err no verify"
+
+cd ${test_tmpdir}
+grep -v '<url protocol' < metalink-data/metalink.xml.orig > metalink-data/metalink.xml
+test_metalink_pull_error "No.*url.*method.*elements"
+echo "ok metalink err no url"
+
+cd ${test_tmpdir}
+echo bacon > metalink-data/metalink.xml
+test_metalink_pull_error "Document must begin with an element"
+echo "ok metalink err malformed"
+

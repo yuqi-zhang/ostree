@@ -146,7 +146,7 @@ ot_checksum_file (GFile          *file,
                   GError        **error)
 {
   GChecksum *checksum = NULL;
-  gs_free gchar *ret = NULL;
+  char *ret = NULL;
   gs_unref_object GInputStream *in = NULL;
 
   in = (GInputStream*)g_file_read (file, cancellable, error);

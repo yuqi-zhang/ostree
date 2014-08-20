@@ -48,12 +48,7 @@ OstreeMetalink *_ostree_metalink_new (OstreeFetcher  *fetcher,
                                       guint64         max_size,
                                       SoupURI        *uri);
 
-gboolean _ostree_metalink_request_sync (OstreeMetalink         *self,
-                                        SoupURI               **out_target_uri,
-                                        GFile                 **out_data,
-                                        GCancellable           *cancellable,
-                                        GError                **error);
-
+SoupURI *_ostree_metalink_get_uri (OstreeMetalink         *self);
 
 void _ostree_metalink_request_async (OstreeMetalink         *self,
                                      GCancellable          *cancellable,

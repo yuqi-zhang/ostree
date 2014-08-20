@@ -339,9 +339,11 @@ metalink_parser_text (GMarkupParseContext *context,
           switch (self->in_verification_type)
             {
             case G_CHECKSUM_SHA256:
+              g_free (self->verification_sha256);
               self->verification_sha256 = g_strndup (text, text_len);
               break;
             case G_CHECKSUM_SHA512:
+              g_free (self->verification_sha512);
               self->verification_sha512 = g_strndup (text, text_len);
               break;
             default:
@@ -692,6 +694,7 @@ _ostree_metalink_request_finish (OstreeMetalink         *self,
 
   if (g_task_propagate_boolean ((GTask*)result, error))
     {
+      g_assert_cmpint (request->current_url_index, <, request->urls->len);
       *out_target_uri = request->urls->pdata[request->current_url_index];
       *out_data = g_object_ref (request->result);
       return TRUE;
@@ -700,53 +703,8 @@ _ostree_metalink_request_finish (OstreeMetalink         *self,
     return FALSE;
 }
 
-typedef struct
+SoupURI *
+_ostree_metalink_get_uri (OstreeMetalink        *self)
 {
-  gboolean                running;
-  gboolean                success;
-  SoupURI               **out_target_uri;
-  GFile                 **out_data;
-  GError                **error;
-} MetalinkSyncCallState;
-
-static void
-on_async_result (GObject          *src,
-                 GAsyncResult     *result,
-                 gpointer          user_data)
-{
-  MetalinkSyncCallState *state = user_data;
-
-  state->success = _ostree_metalink_request_finish ((OstreeMetalink*)src, result,
-                                                    state->out_target_uri, state->out_data,
-                                                    state->error);
-  state->running = FALSE;
-}
-
-gboolean
-_ostree_metalink_request_sync (OstreeMetalink         *self,
-                               SoupURI               **out_target_uri,
-                               GFile                 **out_data,
-                               GCancellable           *cancellable,
-                               GError                **error)
-{
-  gboolean ret = FALSE;
-  GMainContext *sync_context = g_main_context_new ();
-  MetalinkSyncCallState state = { 0, };
-
-  state.error = error;
-  state.running = TRUE;
-
-  g_main_context_push_thread_default (sync_context);
-  
-  _ostree_metalink_request_async (self, cancellable, on_async_result, &state);
-  
-  while (state.running)
-    g_main_context_iteration (sync_context, TRUE);
-
-  g_main_context_pop_thread_default (sync_context);
-
-  ret = state.success;
-  if (sync_context)
-    g_main_context_unref (sync_context);
-  return ret;
+  return self->uri;
 }

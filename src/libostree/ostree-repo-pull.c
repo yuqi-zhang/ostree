@@ -362,6 +362,52 @@ fetch_uri_contents_utf8_sync (OtPullData  *pull_data,
   return ret;
 }
 
+typedef struct
+{
+  OtPullData             *pull_data;
+  SoupURI               **out_target_uri;
+  GFile                 **out_data;
+  gboolean                running;
+  gboolean                success;
+} FetchMetalinkSyncData;
+
+static void
+on_metalink_fetched (GObject          *src,
+                     GAsyncResult     *result,
+                     gpointer          user_data)
+{
+  FetchMetalinkSyncData *data = user_data;
+
+  data->success = _ostree_metalink_request_finish ((OstreeMetalink*)src, result,
+                                                   data->out_target_uri, data->out_data,
+                                                   data->pull_data->async_error);
+  data->running = FALSE;
+}
+
+static gboolean
+request_metalink_sync (OtPullData             *pull_data,
+                       OstreeMetalink         *metalink,
+                       SoupURI               **out_target_uri,
+                       GFile                 **out_data,
+                       GCancellable           *cancellable,
+                       GError                **error)
+{
+  FetchMetalinkSyncData data = { 0, };
+
+  data.pull_data = pull_data;
+  data.out_target_uri = out_target_uri;
+  data.out_data = out_data;
+  data.running = TRUE;
+
+  pull_data->fetching_sync_uri = _ostree_metalink_get_uri (metalink);
+  _ostree_metalink_request_async (metalink, cancellable, on_metalink_fetched, &data);
+  
+  while (data.running)
+    g_main_context_iteration (NULL, TRUE);
+
+  return data.success;
+}
+
 static void
 enqueue_one_object_request (OtPullData        *pull_data,
                             const char        *checksum,
@@ -491,6 +537,7 @@ lookup_commit_checksum_from_summary (OtPullData    *pull_data,
   gs_unref_variant GVariant *commits = g_variant_get_child_value (pull_data->summary, 0);
   gs_unref_variant GVariant *refs = g_variant_get_child_value (pull_data->summary, 1);
   gs_unref_variant GVariant *refdata = NULL;
+  gs_unref_variant GVariant *reftargetdata = NULL;
   gs_unref_variant GVariant *commit_data = NULL;
   gs_unref_variant GVariant *commit_csum_v = NULL;
   gs_unref_bytes GBytes *commit_bytes = NULL;
@@ -505,7 +552,8 @@ lookup_commit_checksum_from_summary (OtPullData    *pull_data,
     }
       
   refdata = g_variant_get_child_value (refs, i);
-  commit_csum_v = g_variant_get_child_value (refdata, 0);
+  reftargetdata = g_variant_get_child_value (refdata, 1);
+  commit_csum_v = g_variant_get_child_value (reftargetdata, 0);
 
   if (!ostree_validate_structureof_csum_v (commit_csum_v, error))
     goto out;
@@ -1203,6 +1251,7 @@ ostree_repo_pull (OstreeRepo               *self,
     {
       gs_unref_object GFile *metalink_data = NULL;
       SoupURI *metalink_uri = soup_uri_new (metalink_url_str);
+      SoupURI *target_uri = NULL;
       
       if (!metalink_uri)
         {
@@ -1211,13 +1260,19 @@ ostree_repo_pull (OstreeRepo               *self,
           goto out;
         }
       
-      metalink = _ostree_metalink_new (pull_data->fetcher, "summary", OSTREE_MAX_METADATA_SIZE, metalink_uri);
+      metalink = _ostree_metalink_new (pull_data->fetcher, "summary",
+                                       OSTREE_MAX_METADATA_SIZE, metalink_uri);
       soup_uri_free (metalink_uri);
 
-      if (!_ostree_metalink_request_sync (metalink, &pull_data->base_uri,
-                                          &metalink_data,
-                                          cancellable, error))
+      if (!request_metalink_sync (pull_data, metalink, &target_uri, &metalink_data,
+                                  cancellable, error))
         goto out;
+
+      {
+        gs_free char *repo_base = g_path_get_dirname (soup_uri_get_path (target_uri));
+        pull_data->base_uri = soup_uri_copy (target_uri);
+        soup_uri_set_path (pull_data->base_uri, repo_base);
+      }
 
       if (!ot_util_variant_map (metalink_data, OSTREE_SUMMARY_GVARIANT_FORMAT, FALSE,
                                 &pull_data->summary, error))
@@ -1286,6 +1341,7 @@ ostree_repo_pull (OstreeRepo               *self,
         }
     }
 
+  g_hash_table_iter_init (&hash_iter, requested_refs_to_fetch);
   while (g_hash_table_iter_next (&hash_iter, &key, &value))
     {
       const char *branch = key;
