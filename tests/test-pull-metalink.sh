@@ -35,6 +35,8 @@ ostree --repo=${test_tmpdir}/ostree-srv/gnomerepo summary -u
 
 summary_path=${test_tmpdir}/ostree-srv/gnomerepo/summary
 
+echo -n broken > ${summary_path}.bad
+
 echo '1..1'
 cd ${test_tmpdir}
 
@@ -50,8 +52,9 @@ cat > ${test_tmpdir}/metalink-data/metalink.xml <<EOF
         <hash type="sha512">$(sha512sum ${summary_path} | cut -f 1 -d ' ')</hash>
       </verification>
       <resources maxconnections="1">
-        <url protocol="http" type="http" location="US" preference="100" >$(cat httpd-address)/ostree/gnomerepo/enoent</url>
-        <url protocol="http" type="http" location="US" preference="99" >$(cat httpd-address)/ostree/gnomerepo/summary</url>
+        <url protocol="http" type="http" location="US" preference="100" >$(cat httpd-address)/ostree/gnomerepo/summary.bad</url>
+        <url protocol="http" type="http" location="US" preference="99" >$(cat httpd-address)/ostree/gnomerepo/nosuchfile</url>
+        <url protocol="http" type="http" location="US" preference="98" >$(cat httpd-address)/ostree/gnomerepo/summary</url>
       </resources>
     </file>
   </files>

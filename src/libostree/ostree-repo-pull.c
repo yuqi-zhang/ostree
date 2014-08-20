@@ -367,7 +367,6 @@ typedef struct
   OtPullData             *pull_data;
   SoupURI               **out_target_uri;
   GFile                 **out_data;
-  gboolean                running;
   gboolean                success;
 } FetchMetalinkSyncData;
 
@@ -381,7 +380,7 @@ on_metalink_fetched (GObject          *src,
   data->success = _ostree_metalink_request_finish ((OstreeMetalink*)src, result,
                                                    data->out_target_uri, data->out_data,
                                                    data->pull_data->async_error);
-  data->running = FALSE;
+  g_main_loop_quit (data->pull_data->loop);
 }
 
 static gboolean
@@ -397,13 +396,11 @@ request_metalink_sync (OtPullData             *pull_data,
   data.pull_data = pull_data;
   data.out_target_uri = out_target_uri;
   data.out_data = out_data;
-  data.running = TRUE;
 
   pull_data->fetching_sync_uri = _ostree_metalink_get_uri (metalink);
   _ostree_metalink_request_async (metalink, cancellable, on_metalink_fetched, &data);
   
-  while (data.running)
-    g_main_context_iteration (NULL, TRUE);
+  run_mainloop_monitor_fetcher (pull_data);
 
   return data.success;
 }
@@ -726,7 +723,8 @@ meta_fetch_on_complete (GObject           *object,
   GError **error = &local_error;
 
   ostree_object_name_deserialize (fetch_data->object, &checksum, &objtype);
-  g_debug ("fetch of %s complete", ostree_object_to_string (checksum, objtype));
+  g_debug ("fetch of %s%s complete", ostree_object_to_string (checksum, objtype),
+           fetch_data->is_detached_meta ? " (detached)" : "");
 
   temp_path = _ostree_fetcher_request_uri_with_partial_finish ((OstreeFetcher*)object, result, error);
   if (!temp_path)
@@ -935,8 +933,9 @@ enqueue_one_object_request (OtPullData        *pull_data,
   FetchObjectData *fetch_data;
   gs_free char *objpath = NULL;
 
-  g_debug ("queuing fetch of %s.%s", checksum,
-           ostree_object_type_to_string (objtype));
+  g_debug ("queuing fetch of %s.%s%s", checksum,
+           ostree_object_type_to_string (objtype),
+           is_detached_meta ? " (detached)" : "");
 
   if (is_detached_meta)
     {
