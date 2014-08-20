@@ -2265,6 +2265,7 @@ out:
 /**
  * ostree_repo_regenerate_summary:
  * @self: Repo
+ * @additional_metadata: (allow-none): A GVariant of type a{sv}, or %NULL
  * @cancellable: Cancellable
  * @error: Error
  *
@@ -2278,23 +2279,20 @@ out:
  */
 gboolean
 ostree_repo_regenerate_summary (OstreeRepo     *self,
+                                GVariant       *additional_metadata,
                                 GCancellable   *cancellable,
                                 GError        **error)
 {
   gboolean ret = FALSE;
   gs_unref_object GFile *summary_path = NULL;
   gs_unref_hashtable GHashTable *refs = NULL;
-  gs_unref_hashtable GHashTable *commits = NULL;
   gs_unref_variant_builder GVariantBuilder *refs_builder = NULL;
-  gs_unref_variant_builder GVariantBuilder *commits_builder = NULL;
   gs_unref_variant GVariant *summary = NULL;
   GList *ordered_keys = NULL;
   GList *iter = NULL;
 
   if (!ostree_repo_list_refs (self, NULL, &refs, cancellable, error))
     goto out;
-
-  commits = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_variant_unref);
 
   refs_builder = g_variant_builder_new (G_VARIANT_TYPE ("a(s(aya{sv}))"));
 
@@ -2305,58 +2303,21 @@ ostree_repo_regenerate_summary (OstreeRepo     *self,
     {
       const char *ref = iter->data;
       const char *commit = g_hash_table_lookup (refs, ref);
-      gs_unref_variant GVariant *csum_v = NULL;
 
       g_assert (commit);
 
-      if (!g_hash_table_lookup (commits, commit))
-        {
-          gs_unref_variant GVariant *commit_content = NULL;
-
-          if (!ostree_repo_load_variant (self, OSTREE_OBJECT_TYPE_COMMIT, commit,
-                                         &commit_content, error))
-            goto out;
-
-          g_hash_table_insert (commits, g_strdup (commit), g_variant_ref (commit_content));
-        }
-
-      csum_v = g_variant_ref_sink (ostree_checksum_to_bytes_v (commit));
-
       g_variant_builder_add_value (refs_builder, 
-                                   g_variant_new ("(s(@ay@a{sv}))", ref, csum_v,
+                                   g_variant_new ("(s(@ay@a{sv}))", ref,
+                                                  ostree_checksum_to_bytes_v (commit),
                                                   ot_gvariant_new_empty_string_dict ()));
-    }
-
-  g_list_free (ordered_keys);
-  ordered_keys = g_hash_table_get_keys (commits);
-  ordered_keys = g_list_sort (ordered_keys, (GCompareFunc)strcmp);
-
-  commits_builder = g_variant_builder_new (G_VARIANT_TYPE ("a(ayay)"));
-  
-  for (iter = ordered_keys; iter; iter = iter->next)
-    {
-      const char *commit = iter->data;
-      GVariant *commit_content = g_hash_table_lookup (commits, commit);
-      gs_unref_variant GVariant *csum_v = NULL;
-      gs_unref_bytes GBytes *commit_data; 
-      gs_unref_variant GVariant *commit_data_v;
-
-      g_assert (commit_content);
-
-      csum_v = g_variant_ref_sink (ostree_checksum_to_bytes_v (commit));
-      commit_data = g_variant_get_data_as_bytes (commit_content);
-      commit_data_v = g_variant_ref_sink (g_variant_new_from_bytes (G_VARIANT_TYPE ("ay"), commit_data, TRUE));
-
-      g_variant_builder_add_value (commits_builder, 
-                                   g_variant_new ("(@ay@ay)", csum_v, commit_data_v));
     }
 
   {
     gs_unref_variant_builder GVariantBuilder *summary_builder =
       g_variant_builder_new (OSTREE_SUMMARY_GVARIANT_FORMAT);
 
-    g_variant_builder_add_value (summary_builder, g_variant_builder_end (commits_builder));
     g_variant_builder_add_value (summary_builder, g_variant_builder_end (refs_builder));
+    g_variant_builder_add_value (summary_builder, additional_metadata ? additional_metadata : ot_gvariant_new_empty_string_dict ());
     summary = g_variant_builder_end (summary_builder);
     g_variant_ref_sink (summary);
   }

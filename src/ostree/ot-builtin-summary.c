@@ -45,7 +45,7 @@ ostree_builtin_summary (int argc, char **argv, OstreeRepo *repo, GCancellable *c
 
   if (opt_update)
     {
-      if (!ostree_repo_regenerate_summary (repo, cancellable, error))
+      if (!ostree_repo_regenerate_summary (repo, NULL, cancellable, error))
         goto out;
     }
   else

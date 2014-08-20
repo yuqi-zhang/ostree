@@ -77,10 +77,5 @@ ot_variant_bsearch_str (GVariant   *array,
                         const char *str,
                         int        *out_pos);
 
-gboolean
-ot_variant_bsearch_bytes (GVariant   *array,
-                          GBytes     *bytes,
-                          int        *out_pos);
-
 G_END_DECLS
 

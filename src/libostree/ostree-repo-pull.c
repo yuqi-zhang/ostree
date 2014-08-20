@@ -531,8 +531,7 @@ lookup_commit_checksum_from_summary (OtPullData    *pull_data,
                                      GError       **error)
 {
   gboolean ret = FALSE;
-  gs_unref_variant GVariant *commits = g_variant_get_child_value (pull_data->summary, 0);
-  gs_unref_variant GVariant *refs = g_variant_get_child_value (pull_data->summary, 1);
+  gs_unref_variant GVariant *refs = g_variant_get_child_value (pull_data->summary, 0);
   gs_unref_variant GVariant *refdata = NULL;
   gs_unref_variant GVariant *reftargetdata = NULL;
   gs_unref_variant GVariant *commit_data = NULL;
