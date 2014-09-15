@@ -52,6 +52,15 @@ dfd_and_name_get_all_xattrs (int            dfd,
                                  cancellable, error);
 }
 
+static int
+xopendirat (int dfd, const char *path, gboolean follow)
+{
+  int flags = O_RDONLY | O_NONBLOCK | O_DIRECTORY | O_CLOEXEC | O_NOCTTY;
+  if (!follow)
+    flags |= O_NOFOLLOW;
+  return openat (dfd, path, flags);
+}
+
 static gboolean
 copy_one_file_fsync_at (int              src_parent_dfd,
                         int              dest_parent_dfd,
@@ -156,6 +165,50 @@ copy_one_file_fsync_at (int              src_parent_dfd,
 }
 
 static gboolean
+dirfd_copy_attributes_and_xattrs (int            src_parent_dfd,
+                                  const char    *src_name,
+                                  int            src_dfd,
+                                  int            dest_dfd,
+                                  GCancellable  *cancellable,
+                                  GError       **error)
+{
+  gboolean ret = FALSE;
+  struct stat src_stbuf;
+  gs_unref_variant GVariant *xattrs = NULL;
+
+  /* Clone all xattrs first, so we get the SELinux security context
+   * right.  This will allow other users access if they have ACLs, but
+   * oh well.
+   */ 
+  if (!dfd_and_name_get_all_xattrs (src_parent_dfd, src_name,
+                                    &xattrs, cancellable, error))
+    goto out;
+  if (!gs_fd_set_all_xattrs (dest_dfd, xattrs,
+                             cancellable, error))
+    goto out;
+
+  if (fstat (src_dfd, &src_stbuf) != 0)
+    {
+      ot_util_set_error_from_errno (error, errno);
+      goto out;
+    }
+  if (fchown (dest_dfd, src_stbuf.st_uid, src_stbuf.st_gid) != 0)
+    {
+      ot_util_set_error_from_errno (error, errno);
+      goto out;
+    }
+  if (fchmod (dest_dfd, src_stbuf.st_mode) != 0)
+    {
+      ot_util_set_error_from_errno (error, errno);
+      goto out;
+    }
+
+  ret = TRUE;
+ out:
+  return ret;
+}
+
+static gboolean
 copy_dir_recurse_fsync (int              src_parent_dfd,
                         int              dest_parent_dfd,
                         const char      *name,
@@ -163,14 +216,12 @@ copy_dir_recurse_fsync (int              src_parent_dfd,
                         GError         **error)
 {
   gboolean ret = FALSE;
-  struct stat src_stbuf;
   int src_dfd = -1;
   int dest_dfd = -1;
   DIR *srcd = NULL;
   struct dirent *dent;
-  gs_unref_variant GVariant *xattrs = NULL;
 
-  src_dfd = openat (src_parent_dfd, name, O_RDONLY | O_NONBLOCK | O_DIRECTORY | O_CLOEXEC);
+  src_dfd = xopendirat (src_parent_dfd, name, TRUE);
   if (src_dfd == -1)
     {
       ot_util_set_error_from_errno (error, errno);
@@ -184,25 +235,17 @@ copy_dir_recurse_fsync (int              src_parent_dfd,
       goto out;
     }
 
-  dest_dfd = openat (dest_parent_dfd, name, O_RDONLY | O_NONBLOCK | O_DIRECTORY | O_CLOEXEC);
+  dest_dfd = xopendirat (dest_parent_dfd, name, TRUE);
   if (dest_dfd == -1)
     {
       ot_util_set_error_from_errno (error, errno);
       goto out;
     }
 
-  /* Clone all xattrs first, so we get the SELinux security context
-   * right.  This will allow other users access if they have ACLs, but
-   * oh well.
-   */ 
-  if (!dfd_and_name_get_all_xattrs (src_parent_dfd, name,
-                                    &xattrs,
-                                    cancellable, error))
+  if (!dirfd_copy_attributes_and_xattrs (src_parent_dfd, name, dest_dfd,
+                                         cancellable, error))
     goto out;
-  if (!gs_fd_set_all_xattrs (dest_dfd, xattrs,
-                             cancellable, error))
-    goto out;
-
+ 
   srcd = fdopendir (src_dfd);
   if (!srcd)
     {
@@ -241,22 +284,6 @@ copy_dir_recurse_fsync (int              src_parent_dfd,
         }
     }
 
-  if (fstat (src_dfd, &src_stbuf) != 0)
-    {
-      ot_util_set_error_from_errno (error, errno);
-      goto out;
-    }
-  if (fchown (dest_dfd, src_stbuf.st_uid, src_stbuf.st_gid) != 0)
-    {
-      ot_util_set_error_from_errno (error, errno);
-      goto out;
-    }
-  if (fchmod (dest_dfd, src_stbuf.st_mode) != 0)
-    {
-      ot_util_set_error_from_errno (error, errno);
-      goto out;
-    }
-
   /* And finally, fsync the fd */
   if (fsync (dest_dfd) != 0)
     {
@@ -276,6 +303,91 @@ copy_dir_recurse_fsync (int              src_parent_dfd,
     (void) close (src_dfd);
   if (dest_dfd != -1)
     (void) close (dest_dfd);
+  return ret;
+}
+
+static gboolean
+ensure_parent_directory (int                 orig_etc_fd,
+                         int                 modified_etc_fd,
+                         int                 new_etc_fd,
+                         const char         *path,
+                         int                *out_dfd,
+                         GCancellable       *cancellable,
+                         GError            **error)
+{
+  gboolean ret = FALSE;
+  const char *parent_slash;
+  const char *name;
+  gs_free char *parent_path = NULL;
+  int mod_parent_dfd = -1;
+  int dest_parent_dfd = -1;
+  int sub_dest_parent_dfd = -1;
+
+  parent_slash = strrchr (path, '/');
+  if (parent_slash != NULL)
+    {
+      name = parent_slash + 1;
+      g_assert (*name != '\0');
+      parent_path = g_strndup (path, parent_slash - path);
+      dest_parent_dfd = xopendirat (new_etc_fd, parent_path, TRUE);
+      if (dest_parent_dfd == -1)
+        {
+          if (errno == ENOENT)
+            {
+              if (!ensure_parent_directory (orig_etc_fd, modified_etc_fd, new_etc_fd,
+                                            parent_path, &sub_dest_parent_dfd, cancellable, error))
+                goto out;
+              mod_parent_dfd = xopendirat (modified_etc_fd, parent_path, TRUE);
+              if (mod_parent_dfd == -1)
+                {
+                  g_prefix_error (error, "openat: ");
+                  ot_util_set_error_from_errno (error, errno);
+                  goto out;
+                }
+              /* Create with mode 0700, we'll fchmod/fchown later */
+              if (mkdirat (sub_dest_parent_dfd, name, 0700) != 0)
+                {
+                  ot_util_set_error_from_errno (error, errno);
+                  goto out;
+                }
+              dest_parent_dfd = xopendirat (new_etc_fd, parent_path, TRUE);
+              if (dest_parent_dfd == -1)
+                {
+                  g_prefix_error (error, "openat: ");
+                  ot_util_set_error_from_errno (error, errno);
+                  goto out;
+                }
+
+              if (!dirfd_copy_attributes_and_xattrs (modified_etc_fd, parent_path, mod_parent_dfd,
+                                                     dest_parent_dfd, cancellable, error))
+                goto out;
+            }
+          else
+            {
+              g_prefix_error (error, "openat: ");
+              ot_util_set_error_from_errno (error, errno);
+              goto out;
+            }
+        }
+    }
+  else
+    {
+      dest_parent_dfd = dup (new_etc_fd);
+      if (dest_parent_dfd == -1)
+        {
+          ot_util_set_error_from_errno (error, errno);
+          goto out;
+        }
+    }
+
+  ret = TRUE;
+  *out_dfd = dest_parent_dfd;
+  dest_parent_dfd = -1
+ out:
+  if (mod_parent_dfd != -1)
+    (void) close (mod_parent_dfd);
+  if (dest_parent_dfd != -1)
+    (void) close (dest_parent_dfd);
   return ret;
 }
 
@@ -300,8 +412,6 @@ copy_modified_config_file (int                 orig_etc_fd,
   gboolean ret = FALSE;
   struct stat modified_stbuf;
   struct stat new_stbuf;
-  const char *parent_slash;
-  gs_free char *parent_path = NULL;
   int dest_parent_dfd = -1;
 
   if (fstatat (modified_etc_fd, path, &modified_stbuf, AT_SYMLINK_NOFOLLOW) < 0)
@@ -311,37 +421,9 @@ copy_modified_config_file (int                 orig_etc_fd,
       goto out;
     }
 
-  parent_slash = strrchr (path, '/');
-  if (parent_slash != NULL)
-    {
-      parent_path = g_strndup (path, parent_slash - path);
-      dest_parent_dfd = openat (new_etc_fd, parent_path, O_RDONLY | O_NONBLOCK | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW | O_NOCTTY);
-      if (dest_parent_dfd == -1)
-        {
-          if (errno == ENOENT)
-            {
-              g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
-                           "New tree removes parent directory '%s', cannot merge",
-                           parent_path);
-            }
-          else
-            {
-              g_prefix_error (error, "openat: ");
-              ot_util_set_error_from_errno (error, errno);
-            }
-          goto out;
-        }
-    }
-  else
-    {
-      parent_path = NULL;
-      dest_parent_dfd = dup (new_etc_fd);
-      if (dest_parent_dfd == -1)
-        {
-          ot_util_set_error_from_errno (error, errno);
-          goto out;
-        }
-    }
+  if (!ensure_parent_directory (orig_etc_fd, modified_etc_fd, new_etc_fd,
+                                path, &dest_parent_dfd, cancellable, error))
+    goto out;
 
   if (fstatat (new_etc_fd, path, &new_stbuf, AT_SYMLINK_NOFOLLOW) < 0)
     {
