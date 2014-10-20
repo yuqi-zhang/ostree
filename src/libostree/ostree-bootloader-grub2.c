@@ -35,10 +35,7 @@ struct _OstreeBootloaderGrub2
 
   OstreeSysroot  *sysroot;
   GFile          *config_path_bios;
-  GFile          *config_path_efi_dir;
-  GFile          *config_path_efi_dest;
-  GFile          *config_path_efi_new;
-  GFile          *config_path_efi_old;
+  GFile          *config_path_efi;
   gboolean        is_efi;
 };
 
@@ -68,6 +65,8 @@ _ostree_bootloader_grub2_query (OstreeBootloader *bootloader,
 
   efi_basedir = g_file_resolve_relative_path (self->sysroot->path, "boot/efi/EFI");
 
+  g_clear_object (&self->config_path_efi);
+
   if (g_file_query_exists (efi_basedir, NULL))
     {
       gs_unref_object GFileEnumerator *direnum = NULL;
@@ -82,7 +81,6 @@ _ostree_bootloader_grub2_query (OstreeBootloader *bootloader,
         {
           GFileInfo *file_info;
           const char *fname;
-          struct stat stbuf;
           gs_free char *subdir_grub_cfg = NULL;
 
           if (!gs_file_enumerator_iterate (direnum, &file_info, NULL,
@@ -100,19 +98,16 @@ _ostree_bootloader_grub2_query (OstreeBootloader *bootloader,
 
           subdir_grub_cfg = g_build_filename (gs_file_get_path_cached (efi_basedir), fname, "grub.cfg", NULL); 
           
-          if (stat (subdir_grub_cfg, &stbuf) == 0)
+          if (g_file_test (subdir_grub_cfg, G_FILE_TEST_EXISTS))
             {
-              self->config_path_efi_dest = g_file_new_for_path (subdir_grub_cfg);
+              self->config_path_efi = g_file_new_for_path (subdir_grub_cfg);
               break;
             }
         }
 
-      if (self->config_path_efi_dest)
+      if (self->config_path_efi)
         {
           self->is_efi = TRUE;
-          self->config_path_efi_dir = g_file_get_parent (self->config_path_efi_dest);
-          self->config_path_efi_new = g_file_get_child (self->config_path_efi_dir, "grub.cfg.new");
-          self->config_path_efi_old = g_file_get_child (self->config_path_efi_dir, "grub.cfg.old");
           *out_is_active = TRUE;
           ret = TRUE;
           goto out;
@@ -260,12 +255,15 @@ _ostree_bootloader_grub2_write_config (OstreeBootloader      *bootloader,
   gs_unref_object GSSubprocess *proc = NULL;
   gs_strfreev char **child_env = g_get_environ ();
   gs_free char *bootversion_str = g_strdup_printf ("%u", (guint)bootversion);
+  gs_unref_object GFile *config_path_efi_dir = NULL;
 
   if (self->is_efi)
     {
-      if (!ot_gfile_ensure_unlinked (self->config_path_efi_new, cancellable, error))
+      config_path_efi_dir = g_file_get_parent (self->config_path_efi);
+      new_config_path = g_file_get_child (config_path_efi_dir, "grub.cfg.new");
+      /* We use grub2-mkconfig to write to a temporary file first */
+      if (!ot_gfile_ensure_unlinked (new_config_path, cancellable, error))
         goto out;
-      new_config_path = g_object_ref (self->config_path_efi_new);
     }
   else
     {
@@ -308,21 +306,23 @@ rm -f ${grub_cfg}.new
 
   if (self->is_efi)
     {
+      gs_unref_object GFile *config_path_efi_old = g_file_get_child (config_path_efi_dir, "grub.cfg.old");
+      
       /* copy current to old */
-      if (!ot_gfile_ensure_unlinked (self->config_path_efi_old, cancellable, error))
+      if (!ot_gfile_ensure_unlinked (config_path_efi_old, cancellable, error))
         goto out;
-      if (!g_file_copy (self->config_path_efi_dest, self->config_path_efi_old,
+      if (!g_file_copy (self->config_path_efi, config_path_efi_old,
                         G_FILE_COPY_OVERWRITE, cancellable, NULL, NULL, error))
         goto out;
-      if (!ot_gfile_ensure_unlinked (self->config_path_efi_old, cancellable, error))
+      if (!ot_gfile_ensure_unlinked (config_path_efi_old, cancellable, error))
         goto out;
 
       /* NOTE: NON-ATOMIC REPLACEMENT; WE can't do anything else on FAT;
        * see https://bugzilla.gnome.org/show_bug.cgi?id=724246
        */
-      if (!ot_gfile_ensure_unlinked (self->config_path_efi_dest, cancellable, error))
+      if (!ot_gfile_ensure_unlinked (new_config_path, cancellable, error))
         goto out;
-      if (!gs_file_rename (self->config_path_efi_new, self->config_path_efi_dest,
+      if (!gs_file_rename (new_config_path, self->config_path_efi,
                            cancellable, error))
         goto out;
     }
@@ -346,6 +346,7 @@ _ostree_bootloader_grub2_finalize (GObject *object)
 
   g_clear_object (&self->sysroot);
   g_clear_object (&self->config_path_bios);
+  g_clear_object (&self->config_path_efi);
 
   G_OBJECT_CLASS (_ostree_bootloader_grub2_parent_class)->finalize (object);
 }
