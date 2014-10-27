@@ -1235,6 +1235,33 @@ ostree_repo_pull_with_options (OstreeRepo             *self,
                                GError                **error)
 {
   gboolean ret = FALSE;
+  gboolean done = FALSE;
+  GMainContext *ctx;
+
+  /* NOTE - for legacy compatibility reasons, we do NOT push a new
+   * default main context.  The original code iterated the caller's,
+   * which is broken, but we need to keep it.
+   *
+   * https://bugzilla.gnome.org/show_bug.cgi?id=737844
+   */
+
+  ctx = g_main_context_ref_thread_default ();
+
+  while (!done)
+    g_main_context_iteration (ctx, 
+}
+
+/* Documented in ostree-repo.c */
+gboolean
+ostree_repo_pull_async (OstreeRepo             *self,
+                        const char             *remote_name,
+                        GVariant               *options,
+                        OstreeAsyncProgress    *progress,
+                        GAsyncReadyCallback     callback,
+                        gpointer                user_data)
+{
+{
+  gboolean ret = FALSE;
   GHashTableIter hash_iter;
   gpointer key, value;
   gboolean tls_permissive = FALSE;

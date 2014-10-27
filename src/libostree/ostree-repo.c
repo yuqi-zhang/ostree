@@ -2221,6 +2221,36 @@ ostree_repo_pull_with_options (OstreeRepo             *self,
   return FALSE;
 }
 
+/**
+ * ostree_repo_pull_async:
+ * @self: Repo
+ * @remote_name: Name of remote
+ * @options: A GVariant a{sv} with an extensible set of flags.
+ * @progress: (allow-none): Progress
+ * @cancellable: Cancellable
+ * @cancellable: Cancellable
+ *
+ * Like ostree_repo_pull(), but supports an extensible set of flags.
+ * The following are currently defined:
+ *
+ *   * subdir (s): Pull just this subdirectory
+ *   * flags (i): An instance of #OstreeRepoPullFlags
+ *   * refs: (as): Array of string refs
+ */
+gboolean
+ostree_repo_pull_async (OstreeRepo             *self,
+                        const char             *remote_name,
+                        GVariant               *options,
+                        OstreeAsyncProgress    *progress,
+                        GCancellable           *cancellable,
+                        GAsyncReadyCallback     callback,
+                        gpointer                user_data)
+{
+  g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+                       "This version of ostree was built without libsoup, and cannot fetch over HTTP");
+  return FALSE;
+}
+
 #endif
 
 /**

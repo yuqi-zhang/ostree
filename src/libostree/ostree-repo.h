@@ -567,6 +567,14 @@ gboolean ostree_repo_pull_with_options (OstreeRepo             *self,
                                         GCancellable           *cancellable,
                                         GError                **error);
 
+gboolean ostree_repo_pull_async (OstreeRepo             *self,
+                                 const char             *remote_name,
+                                 GVariant               *options,
+                                 OstreeAsyncProgress    *progress,
+                                 GCancellable           *cancellable,
+                                 GAsyncReadyCallback     callback,
+                                 gpointer                user_data);
+
 gboolean ostree_repo_sign_commit (OstreeRepo     *self,
                                   const gchar    *commit_checksum,
                                   const gchar    *key_id,
