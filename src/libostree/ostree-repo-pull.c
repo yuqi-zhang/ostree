@@ -1225,6 +1225,23 @@ ostree_repo_pull_one_dir (OstreeRepo               *self,
                                         progress, cancellable, error);
 }
 
+typedef struct {
+  gboolean done;
+  gboolean ret;
+  GError **error;
+} SyncPullData;
+
+static void
+on_pull_async_complete (GObject            *src,
+                        GAsyncResult       *result,
+                        gpointer            user_data)
+{
+  SyncPullData *data = user_data;
+
+  data->ret = ostree_repo_pull_finish ((OstreeRepo*)src, result, data->error);
+  data->done = TRUE;
+}
+
 /* Documented in ostree-repo.c */
 gboolean
 ostree_repo_pull_with_options (OstreeRepo             *self,
@@ -1234,9 +1251,9 @@ ostree_repo_pull_with_options (OstreeRepo             *self,
                                GCancellable           *cancellable,
                                GError                **error)
 {
-  gboolean ret = FALSE;
   gboolean done = FALSE;
   GMainContext *ctx;
+  SyncPullData syncdata = { 0, };
 
   /* NOTE - for legacy compatibility reasons, we do NOT push a new
    * default main context.  The original code iterated the caller's,
@@ -1247,21 +1264,27 @@ ostree_repo_pull_with_options (OstreeRepo             *self,
 
   ctx = g_main_context_ref_thread_default ();
 
+  ostree_repo_pull_async (self, remote_name, options, progress,
+                          cancellable, on_pull_async_complete, &done);
+
   while (!done)
-    g_main_context_iteration (ctx, 
+    g_main_context_iteration (ctx, TRUE); 
+
+  g_main_context_unref (ctx);
+
+  return syncdata->ret;
 }
 
 /* Documented in ostree-repo.c */
-gboolean
+void
 ostree_repo_pull_async (OstreeRepo             *self,
                         const char             *remote_name,
                         GVariant               *options,
                         OstreeAsyncProgress    *progress,
+                        GCancellable           *cancellable,
                         GAsyncReadyCallback     callback,
                         gpointer                user_data)
 {
-{
-  gboolean ret = FALSE;
   GHashTableIter hash_iter;
   gpointer key, value;
   gboolean tls_permissive = FALSE;
@@ -1286,9 +1309,6 @@ ostree_repo_pull_async (OstreeRepo             *self,
   const char *dir_to_pull = NULL;
   char **refs_to_fetch = NULL;
   gboolean is_mirror;
-
-  if (dir_to_pull)
-    g_return_val_if_fail (dir_to_pull[0] == '/', FALSE);
 
   if (options)
     {
